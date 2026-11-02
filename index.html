@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Control Robot Fútbol UTN</title>
+  <style>
+    body { font-family: sans-serif; background: #121212; color: #fff; text-align: center; margin: 0; user-select: none; }
+    .top-bar { padding: 10px; background: #1f1f1f; display: flex; justify-content: space-around; align-items: center; }
+    button { padding: 10px 16px; font-weight: bold; background: #007acc; color: white; border: none; border-radius: 6px; }
+    select { padding: 8px; border-radius: 6px; background: #2a2a2a; color: white; border: 1px solid #444; }
+    .controls { display: flex; justify-content: space-around; height: 65vh; align-items: center; padding: 20px; }
+    .slider-box { display: flex; flex-direction: column; align-items: center; }
+    /* Sliders táctiles */
+    input[type=range] { -webkit-appearance: none; background: #333; border-radius: 8px; outline: none; }
+    .vertical { transform: rotate(-90deg); width: 220px; height: 40px; }
+    .horizontal { width: 220px; height: 40px; }
+  </style>
+</head>
+<body>
+
+  <div class="top-bar">
+    <button id="btnConnect" onclick="conectarBLE()">CONECTAR ROBOT</button>
+    <select id="selectEquipo">
+      <option value="eq1">Equipo 1 (Agresivo)</option>
+      <option value="eq2">Equipo 2 (Precisión)</option>
+      <option value="eq3">Equipo 3 (Equilibrado)</option>
+    </select>
+  </div>
+
+  <div class="controls">
+    <!-- Slider Acelerador (Vertical) -->
+    <div class="slider-box">
+      <label>ACELERADOR (Y)</label>
+      <input type="range" id="sliderY" class="vertical" min="-100" max="100" value="0">
+    </div>
+
+    <!-- Slider Volante (Horizontal) -->
+    <div class="slider-box">
+      <label>DIRECCIÓN (X)</label>
+      <input type="range" id="sliderX" class="horizontal" min="-100" max="100" value="0">
+    </div>
+  </div>
+
+<script>
+  // UUIDs estándar de Nordic UART Service (NUS)
+  const UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+  const UART_TX_CHAR_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"; // RX del ESP32
+
+  let bleDevice = null;
+  let txCharacteristic = null;
+  let intervalEnvio = null;
+
+  const sliderY = document.getElementById("sliderY");
+  const sliderX = document.getElementById("sliderX");
+  const selectEquipo = document.getElementById("selectEquipo");
+
+  // Efecto resorte: al soltar el dedo, vuelven al centro (0)
+  sliderY.addEventListener("touchend", () => { sliderY.value = 0; });
+  sliderY.addEventListener("mouseup", () => { sliderY.value = 0; });
+  sliderX.addEventListener("touchend", () => { sliderX.value = 0; });
+  sliderX.addEventListener("mouseup", () => { sliderX.value = 0; });
+
+  async function conectarBLE() {
+    try {
+      bleDevice = await navigator.bluetooth.requestDevice({
+        filters: [{ namePrefix: "FUTBOL" }, { namePrefix: "ROBOT" }],
+        optionalServices: [UART_SERVICE_UUID]
+      });
+
+      const server = await bleDevice.gatt.connect();
+      const service = await server.getPrimaryService(UART_SERVICE_UUID);
+      txCharacteristic = await service.getCharacteristic(UART_TX_CHAR_UUID);
+
+      document.getElementById("btnConnect").innerText = "CONECTADO";
+      document.getElementById("btnConnect").style.background = "#28a745";
+
+      // Loop de transmisión de comandos cada 40 ms (25 Hz)
+      if (!intervalEnvio) {
+        intervalEnvio = setInterval(procesarYEnviar, 40);
+      }
+    } catch (error) {
+      console.error("Error BLE:", error);
+    }
+  }
+
+  function procesarYEnviar() {
+    if (!txCharacteristic) return;
+
+    let y = parseInt(sliderY.value);
+    let x = parseInt(sliderX.value);
+    let equipo = selectEquipo.value;
+
+    let vIzq = 0;
+    let vDer = 0;
+
+    // Fórmulas matemáticas según el equipo seleccionado
+    if (equipo === "eq1") {
+      // Directo 100% agresivo
+      vIzq = y + x;
+      vDer = y - x;
+    } else if (equipo === "eq2") {
+      // Curva suave para apuntar a la pelota (giro amortiguado al 60%)
+      vIzq = y + (x * 0.6);
+      vDer = y - (x * 0.6);
+    } else if (equipo === "eq3") {
+      // Modo balanceado
+      vIzq = (y * 0.8) + (x * 0.8);
+      vDer = (y * 0.8) - (x * 0.8);
+    }
+
+    // Acotar entre -100 y +100
+    vIzq = Math.max(-100, Math.min(100, Math.round(vIzq)));
+    vDer = Math.max(-100, Math.min(100, Math.round(vDer)));
+
+    // Trama de 3 bytes: [Header 0x55, vIzq (con signo), vDer (con signo)]
+    let buffer = new Int8Array([0x55, vIzq, vDer]);
+    txCharacteristic.writeValueWithoutResponse(buffer).catch(() => {});
+  }
+</script>
+</body>
+</html>
